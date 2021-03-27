@@ -1,0 +1,433 @@
+<html>
+
+<head>
+    <title>简单直播间</title>
+    <style type="text/css">
+    body {
+        background: #888888 center center no-repeat;
+        color: white;
+    }
+
+    button {
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .room {
+        border: 1px solid black;
+        cursor: pointer;
+        user-select: none;
+        text-align: center;
+        background: rgba(0, 0, 0, 0.5);
+    }
+
+    video {
+        width: 75%;
+        border: 2px solid black;
+        border-image: linear-gradient(#F80, #2ED) 20 20;
+    }
+
+    #chat {
+        position: fixed;
+        top: 5px;
+        right: 5px;
+        width: calc(25% - 30px);
+        height: calc(75% - 10px);
+        background: rgba(0, 0, 0, 0.5);
+    }
+
+    .content {
+        height: calc(100% - 66px);
+        margin-top: 5px;
+        margin-bottom: 5px;
+        overflow-y: scroll;
+    }
+
+    #chatSend {
+        white-space: nowrap;
+    }
+
+    #chatSend>input {
+        width: calc(100% - 90px);
+    }
+
+    #chatSend>button {
+        width: 80px;
+    }
+
+    #chatTag {
+        margin-left: 10px;
+        line-height: 30px;
+    }
+
+    .chatKuang {
+        border: 1px solid white;
+        margin: 3px;
+        border-radius: 5px;
+    }
+
+    .hintKuang {
+        margin: 3px;
+        text-align: center;
+    }
+    </style>
+</head>
+
+<body>
+    <div id="create">
+        名称:<input id="name" type="text" />
+        <button onclick="createRoom()">创建直播间</button>
+        <span id="count"></span>
+    </div>
+    <video id="localVideo" autoplay controls="controls"></video>
+    <br />
+    <div id="chat">
+        <div id="chatTag">
+            <button onclick="changeTag(0)">房间列表</button>
+            <button onclick="changeTag(1)">房间聊天</button>
+        </div>
+        <div id="roomContent" class="content"></div>
+        <div id="chatContent" class="content" style="display: none"></div>
+        <div id="chatSend">
+            <input type="text" />
+            <button onclick="chatSend()">发送</button>
+        </div>
+    </div>
+    <script type="text/javascript">
+    // 背景图片
+    (function() {
+        var img = new Image();
+        img.addEventListener("load", function() {
+            document.querySelector("body").style.background =
+                "url('" + this.src + "') center center no-repeat";
+            let _img = this;
+            calculateBackgroundImageScale(_img);
+            window.onresize = function(_img) {
+                calculateBackgroundImageScale(_img);
+            }
+        });
+
+        img.src = "https://parva.cool/share/sky043.jpg";
+    })();
+
+    //计算背景图片缩放（自适应窗口大小）
+    function calculateBackgroundImageScale(img) {
+        let w1 = document.body.clientWidth;
+        let h1 = document.body.clientHeight;
+        let w2 = img.width;
+        let h2 = img.height;
+        let scale1 = w1 / w2;
+        let scale2 = h1 / h2;
+        let scale = scale1 > scale2 ? scale1 : scale2;
+        document.querySelector("body").style.backgroundSize =
+            Math.ceil(w2 * scale) + "px " + Math.ceil(h2 * scale) + "px";
+    }
+
+    // 存储本地媒体流
+    var localStream;
+
+    // 与服务器的websocket通信
+    var socket = new WebSocket("wss://parva.cool/rtc");
+
+    // 判断自己是否正在直播
+    var isMe;
+
+    // 当前的标签页(0:房间列表, 1:房间聊天)
+    var tag = 0;
+
+    // 发送聊天信息
+    function chatSend() {
+        let input = document.querySelector("#chatSend input");
+        let msg = input.value;
+        input.value = "";
+        if (Object.keys(pcs).length == 0) return;
+        if (isMe) {
+            socket.send(JSON.stringify({ event: "chatSend", msg: msg }));
+        } else {
+            socket.send(JSON.stringify({
+                event: "chatSend",
+                msg: msg,
+                roomName: Object.keys(pcs)[0]
+            }));
+        }
+    }
+
+    // 切换标签
+    function changeTag(t) {
+        tag = t;
+        document.querySelector("#roomContent").style.display = "none";
+        document.querySelector("#chatContent").style.display = "none";
+        if (tag == 0) {
+            document.querySelector("#roomContent").style.display = "block";
+        } else if (tag == 1) {
+            document.querySelector("#chatContent").style.display = "block";
+        }
+    }
+
+    // 创建直播间
+    function createRoom() {
+        let roomName = document.querySelector("#name").value;
+        if (!localStream) {
+            navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+                .then((stream) => {
+                    localStream = stream;
+                    socket.send(JSON.stringify({
+                        event: "createRoom",
+                        roomName: roomName
+                    }));
+                });
+        } else {
+            socket.send(JSON.stringify({
+                event: "createRoom",
+                roomName: roomName
+            }));
+        }
+    }
+
+    // 关闭直播间
+    function closeRoom() {
+        socket.send(JSON.stringify({ event: "closeRoom" }));
+        document.querySelector("input").disabled = false;
+        document.querySelector("button").innerHTML = "创建直播间";
+        document.querySelector("button").setAttribute("onclick",
+            "createRoom()");
+        document.querySelector("video").srcObject = null;
+        pcs = {};
+        let content = document.querySelector("#chatContent");
+        content.innerHTML = "";
+        changeTag(0);
+        let count = document.querySelector("#count");
+        count.innerHTML = "";
+        localStream.getTracks()[0].stop();
+    }
+
+    // 进入直播间
+    var 防止双击;
+    var 防止双击setTimeout;
+
+    function joinRoom(roomName) {
+        if (防止双击 == roomName) return;
+        else 防止双击 = roomName;
+        clearTimeout(防止双击setTimeout);
+        防止双击setTimeout = setTimeout(function() { 防止双击 = ""; }, 800);
+        let name = document.querySelector("#name").value;
+        socket.send(JSON.stringify({
+            event: "joinRoom",
+            name: name,
+            roomName: roomName
+        }));
+    }
+
+    // 接收服务器的消息
+    socket.onmessage = function(event) {
+        let json = JSON.parse(event.data);
+
+        // 接收聊天信息
+        if (json.event === "chat") {
+            let chatName = document.createElement("span");
+            chatName.innerHTML = json.name + " : ";
+            chatName.setAttribute("class", "chatName");
+            let chatMessage = document.createElement("span");
+            chatMessage.innerHTML = json.msg;
+            chatName.setAttribute("class", "chatMessage");
+            let chatKuang = document.createElement("div");
+            chatKuang.setAttribute("class", "chatKuang");
+            chatKuang.appendChild(chatName);
+            chatKuang.appendChild(chatMessage);
+            let content = document.querySelector("#chatContent");
+            content.appendChild(chatKuang);
+            content.scrollTop = 9999999;
+        }
+
+        // 通知新人加入房间
+        if (json.event === "joinHint") {
+            let hintKuang = document.createElement("div");
+            hintKuang.setAttribute("class", "hintKuang");
+            hintKuang.innerHTML = json.name + "加入直播房间！"
+            let content = document.querySelector("#chatContent");
+            content.appendChild(hintKuang);
+            content.scrollTop = 9999999;
+        }
+
+        // 有人退出当前房间
+        if (json.event === "quitHint") {
+            let hintKuang = document.createElement("div");
+            hintKuang.setAttribute("class", "hintKuang");
+            hintKuang.innerHTML = json.name + "退出房间.."
+            let content = document.querySelector("#chatContent");
+            content.appendChild(hintKuang);
+            content.scrollTop = 9999999;
+        }
+
+        // 接收房间人数
+        if (json.event === "count") {
+            let count = document.querySelector("#count");
+            count.innerHTML = "\t在场众神数量 : " + json.count;
+        }
+
+        // 所有房间的信息
+        if (json.event === "roomsInfo") {
+            if (tag != 0) return;
+            let content = document.querySelector("#roomContent");
+            content.innerHTML = "";
+            for (let i = 0; i < json.info.length; i++) {
+                let div = document.createElement("div");
+                div.innerHTML = json.info[i];
+                div.setAttribute("onclick", "joinRoom('" + json.info[i] + "')");
+                div.setAttribute("class", "room");
+                content.appendChild(div);
+            }
+        }
+
+        // 创建房间失败
+        if (json.event === "createRoomFailed") {
+            alert("创建房间失败，名称已存在 或 名称格式有误");
+            localStream.getTracks()[0].stop();
+        }
+
+        // 创建房间成功
+        if (json.event === "createRoomOk") {
+            document.querySelector("input").disabled = true;
+            document.querySelector("button").innerHTML = "关闭直播间";
+            document.querySelector("button").setAttribute("onclick",
+                "closeRoom()");
+            document.querySelector("video").srcObject = localStream;
+            document.querySelector("video").volume = 0;
+            isMe = true;
+            changeTag(1);
+            let hintKuang = document.createElement("div");
+            hintKuang.setAttribute("class", "hintKuang");
+            hintKuang.innerHTML = "创建直播房间成功！"
+            let content = document.querySelector("#chatContent");
+            content.appendChild(hintKuang);
+            content.scrollTop = 9999999;
+        }
+
+        // 加入房间失败
+        if (json.event === "joinRoomFailed") {
+            alert("加入房间失败，名称已存在 或 名称格式有误");
+        }
+
+        // 主播下播，退出房间
+        if (json.event === "roomClosed") {
+            document.querySelector("video").srcObject = null;
+            pcs = {};
+            let content = document.querySelector("#chatContent");
+            content.innerHTML = "";
+            changeTag(0);
+            document.querySelector("input").disabled = false;
+            let count = document.querySelector("#count");
+            count.innerHTML = "";
+        }
+
+        // 有人欲加入我的直播间
+        if (json.event === "joinRoom") {
+            // 为对方创建一个pc实例，并发送offer给他
+            var pc = createRTCPeerConnection(json.name);
+            // rtc建立连接：创建一个offer给对方
+            pc.createOffer(function(desc) {
+                pc.setLocalDescription(desc);
+                socket.send(JSON.stringify({
+                    event: "_offer",
+                    data: {
+                        sdp: desc,
+                        nameB: json.name
+                    }
+                }));
+            }, function(error) {
+                console.log("CreateOffer Failure callback: " + error);
+            });
+        }
+
+        // rtc建立连接：接收到offer
+        if (json.event === "_offer") {
+            // 为对方创建一个pc实例，并发送offer给他
+            var pc = createRTCPeerConnection(json.data.nameA);
+            pc.setRemoteDescription(new RTCSessionDescription(json.data.sdp));
+            // rtc建立连接：创建一个answer给对方
+            pc.createAnswer(function(desc) {
+                pc.setLocalDescription(desc);
+                socket.send(JSON.stringify({
+                    event: "_answer",
+                    data: {
+                        sdp: desc,
+                        nameA: json.data.nameA
+                    }
+                }));
+            }, function(error) {
+                console.log("CreateAnswer Failure callback: " + error);
+            });
+        }
+
+        // rtc建立连接：接收到answer
+        if (json.event === "_answer") {
+            pcs[json.data.nameB].setRemoteDescription(
+                new RTCSessionDescription(json.data.sdp));
+        }
+
+        // rtc建立连接：接收到_ice_candidate
+        if (json.event === "_ice_candidate") {
+            pcs[json.data.from].addIceCandidate(
+                new RTCIceCandidate(json.data.candidate));
+        }
+    }
+
+
+    // 存储pc实例
+    var pcs = {};
+
+    // stun和turn服务器URL及配置
+    var iceServer = {
+        iceServers: [
+            { urls: "stun:parva.cool:3478" },
+            {
+                urls: "turn:parva.cool:3478",
+                username: "parva",
+                credential: "Parva089"
+            }
+        ]
+    };
+
+    // 创建RTCPeerConnection实例
+    function createRTCPeerConnection(name) {
+        let pc = new RTCPeerConnection(iceServer);
+        if (!isMe) {
+            for (let n in pcs) pcs[n].close();
+            pcs = {};
+        }
+        // 以{对方的名字:PC实例}键值对形式把PC实例存储起来
+        pcs[name] = pc;
+        if (localStream) pc.addStream(localStream);
+        else pc.addStream(new MediaStream());
+
+        pc.onicecandidate = function(event) {
+            if (event.candidate !== null)
+                socket.send(JSON.stringify({
+                    event: "_ice_candidate",
+                    data: {
+                        candidate: event.candidate,
+                        to: Object.keys(pcs).find(k => pcs[k] == pc)
+                    }
+                }));
+        }
+
+        pc.ontrack = function(event) {
+            if (isMe) return;
+            changeTag(1);
+            document.querySelector("video").srcObject = event.streams[0];
+            document.querySelector("input").disabled = true;
+            let hintKuang = document.createElement("div");
+            hintKuang.setAttribute("class", "hintKuang");
+            hintKuang.innerHTML = "成功进入直播间！"
+            let content = document.querySelector("#chatContent");
+            content.innerHTML = "";
+            content.appendChild(hintKuang);
+            content.scrollTop = 9999999;
+        }
+
+        return pc;
+    }
+    </script>
+</body>
+
+</html>
